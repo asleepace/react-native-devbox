@@ -1,9 +1,9 @@
-import {useEffect, useRef, useState} from 'react';
+import {useEffect, useState} from 'react';
 import dgram from 'react-native-udp';
+import { decode } from '../utils/decoder';
 
 export enum Status {
   INIT = 'INIT',
-  CONNECTED = 'CONNECTED',
   LISTENING = 'LISTENING',
   ERROR = 'ERROR',
 }
@@ -17,34 +17,47 @@ export function useSocket({
   host = 'http://localhost',
   port = 9090,
 }: SocketProps) {
-  console.log('[useSocket] host', host, 'port', port);
   const [status, setStatus] = useState<Status>(Status.INIT);
   const [error, setError] = useState<Error | undefined>();
   const [data, setData] = useState<any[]>([]);
-  const socket = useRef(
-    dgram.createSocket({
+
+  useEffect(() => {
+    console.log('[useSocket] creating connection!');
+    // create the socket instance
+    const socket = dgram.createSocket({
       reusePort: true,
       type: 'udp4',
       debug: true,
-    }),
-  ).current;
+    });
 
-  useEffect(() => {
-    if (!socket || !port) {
-      console.warn('[useSocket] socket or port is not defined');
-      return;
-    }
     // bind socket to the specified port
     socket.bind(port);
-    // triggered once connected
-    socket.once('connection', () => {
-      console.log('[connection] socket is now connected!');
-      setStatus(Status.CONNECTED);
+
+    socket.once('listening', () => {
+      console.log('[listening] socket is now listening!');
+      setStatus(Status.LISTENING);
+      // send a message to the same host to hole punch and allow
+      // incoming connections from anywhere.
+      socket.send(
+        'holePunch',
+        undefined,
+        undefined,
+        port,
+        host,
+        (sendError: Error | undefined) => {
+          if (sendError) {
+            setError(error);
+            setStatus(Status.ERROR);
+          }
+        },
+      );
     });
+
     // triggered when a message occurs
-    socket.on('message', (...args) => {
-      console.log('[message]', ...args);
-      setData(prevData => [...prevData, args]);
+    socket.on('message', (message, info) => {
+      const string = decode(message);
+      console.log('[message] str:', string);
+      setData(prevData => [...prevData, string]);
     });
     // triggered when an error happens
     socket.on('error', (nextError: Error) => {
@@ -52,10 +65,16 @@ export function useSocket({
       setError(nextError);
       setStatus(Status.ERROR);
     });
-  }, [socket, port]);
+
+    // cleanup the socket
+    return () => {
+      socket.close();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // derived values
-  const isConnected = status === Status.CONNECTED;
+  const isConnected = status === Status.LISTENING;
 
   // output values
   return {status, data, error, isConnected};
